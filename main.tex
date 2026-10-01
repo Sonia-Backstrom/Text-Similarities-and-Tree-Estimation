@@ -1,0 +1,1082 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{microtype}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=blue
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    frame=single,
+    breaklines=true,
+    columns=fullflexible
+}
+
+\title{\textbf{Report on Text Similarity and Tree Estimation Exercise}\\
+
+\large DA7067 Computational Mathematics}
+
+\author{ Onyinyechi Sonia Bäckström, Yuqi Yang, Lovisa Irberger\\
+Stockholm University}
+
+\date{September 2026}
+
+\begin{document}
+
+\maketitle
+\newpage
+\tableofcontents
+\newpage
+\begin{abstract}
+
+This report describes a Python implementation for estimating genomic similarity
+using k-mers, density-based MinHash sketching, and the Jaccard Index. The
+estimated Jaccard values are converted to genomic distances using
+$d=1-J$. These distances are then used to construct binary evolutionary trees
+with UPGMA.
+
+The program accepts a FASTA file, a k-mer size, and a sketching density as
+command-line parameters. Experiments were performed on three simulated
+datasets containing 3, 5, and 10 genomes, and on a real dataset containing
+20 \textit{E. coli} genomes.
+
+The report investigates how sketching density and k-mer size affect the
+estimated distance, evaluates the resulting evolutionary trees against the
+known lineage information in the simulated datasets, and reports the runtime
+of the implementation. Exact Jaccard values and distances are also calculated
+for the small simulated datasets as an additional validation of the sketch
+estimates.
+
+\end{abstract}
+\newpage
+
+
+% ============================================================
+\section{Introduction}
+% ============================================================
+
+The purpose of this assignment is to estimate pairwise genomic distances using
+k-mer sketching and the Jaccard Index, and then use the resulting distances to
+construct a binary evolutionary tree.
+
+For two genomes $A$ and $B$, the genomic distance is defined as
+
+\begin{equation}
+d(A,B)=1-J(A,B),
+\end{equation}
+
+where $J(A,B)$ is the Jaccard Index.
+
+Task 1 investigates two questions:
+
+\begin{enumerate}
+    \item Does the estimated genomic distance change with sketching density?
+    \item Does the estimated genomic distance change with k-mer size?
+\end{enumerate}
+
+Task 2 uses the estimated distances from Task 1 to construct binary
+evolutionary trees. The assignment requires the tree structure, rather than
+branch lengths. The three simulated datasets contain 3, 5, and 10 genomes,
+while the real dataset contains 20 \textit{E. coli} genomes.
+
+For the simulated datasets, the accession numbers also contain lineage
+information. This makes it possible to compare the estimated trees with the
+known simulated lineage.
+
+
+% ============================================================
+\section{Program and How to Run It}
+% ============================================================
+
+\subsection{Programming Language}
+
+The program is written in Python 3.
+
+The implementation uses the Python standard-library modules
+\texttt{argparse}, \texttt{hashlib}, \texttt{time}, and \texttt{csv}.
+
+\subsection{Command-Line Usage}
+
+The program is run using
+
+\begin{lstlisting}
+python Problem3.py <FASTA file> <k-mer size> <density>
+\end{lstlisting}
+
+For example:
+
+\begin{lstlisting}
+python Problem3.py test1.fa 30 0.5
+python Problem3.py test2.fa 30 0.5
+python Problem3.py test3.fa 30 0.5
+python Problem3.py ecoli_20_genomes_short_acc.fa 30 0.5
+\end{lstlisting}
+
+The program reads the genomes from the FASTA file and reports the number of
+k-mers, sketch size, pairwise estimated Jaccard values, estimated distances,
+the distance matrix, the UPGMA tree, and runtime information.
+
+The estimated distance matrix is also saved to
+
+\begin{lstlisting}
+distances.csv
+\end{lstlisting}
+
+
+% ============================================================
+\section{Methods}
+% ============================================================
+
+\subsection{Reading FASTA Files}
+
+Each genome is read from the FASTA file. A line beginning with \texttt{>}
+indicates a new genome, and the following sequence lines are joined together.
+
+For a sequence of length $L$ and k-mer size $k$, the program considers
+
+\begin{equation}
+L-k+1
+\end{equation}
+
+possible k-mers.
+
+Only k-mers containing the characters A, C, G, or T are retained. The k-mers
+are stored in a Python set, meaning that repeated copies of the same k-mer
+are represented only once.
+
+For the density experiment, $k=30$ was used with densities
+$0.1, 0.2, 0.3, 0.5, 0.7,$ and $0.9$. For the k-mer-size experiment,
+density $=0.5$ was used with $k=10, 30, 50, 70,$ and $90$. The main
+Task 2 experiments and the real \textit{E. coli} experiment used
+$k=30$ and density $=0.5$.
+\subsection{Hashing and Sketching}
+
+Each k-mer is converted into a deterministic 64-bit hash using BLAKE2b.
+The hash value is normalized by
+
+\begin{equation}
+h_{\mathrm{norm}}=\frac{h}{2^{64}}.
+\end{equation}
+
+A hash is included in the sketch if
+
+\begin{equation}
+h_{\mathrm{norm}} < p,
+\end{equation}
+
+where $p$ is the user-specified sketching density.
+
+For example, a density of $0.5$ keeps approximately half of the hash values,
+while a density of $0.1$ produces a much smaller sketch.
+
+This is a density-based hash sketching approach from the MinHash methods
+discussed in the lectures.
+
+A deterministic BLAKE2b hash was used instead of Python's built-in
+\texttt{hash()} because the built-in hash can use a different randomized seed
+between program runs.
+
+\subsection{Jaccard Similarity and Genomic Distance}
+
+For two sketches $S_A$ and $S_B$, the estimated Jaccard Index is
+
+\begin{equation}
+\widehat{J}(A,B)
+=
+\frac{|S_A\cap S_B|}
+{|S_A\cup S_B|}.
+\end{equation}
+
+The estimated genomic distance is then
+
+\begin{equation}
+\widehat{d}(A,B)
+=
+1-\widehat{J}(A,B).
+\end{equation}
+
+The program calculates this for every pair of genomes and stores the results
+in a symmetric distance matrix.
+
+\subsection{UPGMA Tree Construction}
+
+The distance matrix is used to construct a binary tree with UPGMA
+(Unweighted Pair Group Method with Arithmetic Mean).
+
+Initially, every genome is a separate cluster. The two closest clusters are
+merged repeatedly until only one cluster remains.
+
+When clusters $A$ and $B$ are merged, their distance to another cluster $C$
+is calculated using
+
+\begin{equation}
+d(A\cup B,C)
+=
+\frac{|A|d(A,C)+|B|d(B,C)}
+{|A|+|B|}.
+\end{equation}
+
+Here, $|A|$ and $|B|$ are the numbers of original genomes in the two
+clusters.
+
+The final result is a binary tree containing the original genomes as leaves.
+Only the structure of the tree is considered in this assignment.
+
+\subsection{Accession Numbers and Genome Labels}
+
+An accession is the genome identifier provided in the FASTA file.
+
+For the simulated datasets, the accession number also contains information
+about the intended lineage. The program renames the genomes as G1, G2, G3,
+etc. to make the output easier to read.
+
+For example, in Test 1:
+
+\begin{itemize}
+    \item G1 = accession 1, lineage [0]
+    \item G2 = accession 5, lineage [2,0]
+    \item G3 = accession 6, lineage [2,0]
+\end{itemize}
+
+Thus, G2 and G3 have the same simulated lineage.
+
+\subsection{Runtime Measurement}
+
+The program measures four parts of the computation:
+
+\begin{enumerate}
+    \item sketch generation,
+    \item distance calculation,
+    \item UPGMA construction,
+    \item total computation time.
+\end{enumerate}
+
+The measurements are obtained using Python's
+\texttt{time.perf\_counter()}.
+
+
+% ============================================================
+\section{Task 1 Results}
+% ============================================================
+
+\subsection{Effect of Sketching Density}
+
+To investigate the first guiding question, Test 1 was run with a fixed
+k-mer size of $k=30$. The densities tested were
+\[
+0.1,\ 0.2,\ 0.3,\ 0.5,\ 0.7,\ 0.9.
+\]
+
+The main Task 1 result is the estimated Jaccard Index and the corresponding
+estimated genomic distance.
+The number of distinct k-mers was 171 for each of the three genomes at
+every density, since the k-mer size was kept fixed. The sketch sizes
+increased as the density increased. At density 0.1, the sketch sizes of
+G1, G2, and G3 were 25, 16, and 19, respectively. At density 0.2 they
+were 40, 35, and 32; at density 0.3 they were 57, 59, and 54; at density
+0.5 they were 88, 92, and 92; at density 0.7 they were 120, 123, and
+123; and at density 0.9 they were 149, 161, and 155.
+
+The estimated distance changes with sketching density. For example, for
+G2--G3 the estimated distance changes from 0.6000 at density 0.1 to
+0.6610 at density 0.9.
+
+The change is not perfectly monotonic for every genome pair. However,
+increasing the density produces a larger sketch and retains more
+information from the original k-mer sets.
+
+Therefore, the answer to the first guiding question is:
+\begin{quote}
+\textbf{The estimated genomic distance changes with sketching density.}
+\end{quote}
+\begin{table}[H]
+\centering
+\small
+\caption{Estimated Jaccard values and genomic distances for different
+sketching densities on Test 1 with $k=30$.}
+\begin{tabular}{c|c|c|c}
+\toprule
+Density & Genome pair & Estimated $J$ & Estimated $d$\\
+\midrule
+0.1 & G1--G2 & 0.0789 & 0.9211\\
+    & G1--G3 & 0.0732 & 0.9268\\
+    & G2--G3 & 0.4000 & 0.6000\\
+\midrule
+0.2 & G1--G2 & 0.0714 & 0.9286\\
+    & G1--G3 & 0.0746 & 0.9254\\
+    & G2--G3 & 0.4255 & 0.5745\\
+\midrule
+0.3 & G1--G2 & 0.0841 & 0.9159\\
+    & G1--G3 & 0.0882 & 0.9118\\
+    & G2--G3 & 0.4125 & 0.5875\\
+\midrule
+0.5 & G1--G2 & 0.0843 & 0.9157\\
+    & G1--G3 & 0.0843 & 0.9157\\
+    & G2--G3 & 0.3731 & 0.6269\\
+\midrule
+0.7 & G1--G2 & 0.0897 & 0.9103\\
+    & G1--G3 & 0.0897 & 0.9103\\
+    & G2--G3 & 0.3443 & 0.6557\\
+\midrule
+0.9 & G1--G2 & 0.0839 & 0.9161\\
+    & G1--G3 & 0.0857 & 0.9143\\
+    & G2--G3 & 0.3390 & 0.6610\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% ============================================================
+\subsection{Effect of K-mer Size}
+% ============================================================
+To investigate the second guiding question, Test 1 was run with a fixed sketching density of $0.5$. The tested k-mer sizes were
+$10$, $30$, $50$, $70$, and $90$.
+
+The sketch sizes for G1, G2, and G3 were 104, 105, and 102 at $k=10$.
+At $k=30$, the sketch sizes were 88, 92, and 92. At $k=50$, they were
+69, 77, and 76. At $k=70$, they were 66, 79, and 69, and at $k=90$ they
+were 61, 56, and 58.
+
+For $k=30$, each genome contained 171 distinct k-mers. 
+
+The estimated Jaccard values and genomic distances were:
+
+\begin{table}[H]
+\centering
+\small
+\caption{Estimated Jaccard values and genomic distances for different
+k-mer sizes on Test 1 with density $=0.5$.}
+\begin{tabular}{c|c|c|c}
+\toprule
+$k$ & Genome pair & Estimated $J$ & Estimated $d$\\
+\midrule
+10 & G1--G2 & 0.4027 & 0.5973\\
+   & G1--G3 & 0.3826 & 0.6174\\
+   & G2--G3 & 0.5682 & 0.4318\\
+\midrule
+30 & G1--G2 & 0.0843 & 0.9157\\
+   & G1--G3 & 0.0843 & 0.9157\\
+   & G2--G3 & 0.3731 & 0.6269\\
+\midrule
+50 & G1--G2 & 0.0000 & 1.0000\\
+   & G1--G3 & 0.0000 & 1.0000\\
+   & G2--G3 & 0.2750 & 0.7250\\
+\midrule
+70 & G1--G2 & 0.0000 & 1.0000\\
+   & G1--G3 & 0.0000 & 1.0000\\
+   & G2--G3 & 0.2333 & 0.7667\\
+\midrule
+90 & G1--G2 & 0.0000 & 1.0000\\
+   & G1--G3 & 0.0000 & 1.0000\\
+   & G2--G3 & 0.1400 & 0.8600\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The k-mer size has a strong effect on the estimated genomic distance.
+For G2--G3, the estimated distance increases from 0.4318 at $k=10$ to
+0.8600 at $k=90$.
+
+For G1--G2 and G1--G3, the estimated Jaccard Index is zero for
+$k=50$, $70$, and $90$, resulting in an estimated distance of 1.0000.
+
+Therefore, the answer to the second guiding question is:
+
+\begin{quote}
+\textbf{The genomic distance changes substantially with k-mer size.}
+\end{quote}
+
+Larger k-mers are more specific, which results in fewer shared k-mers
+between the genomes in these experiments.
+
+% ============================================================
+\section{Additional Validation}
+% ============================================================
+
+The exact Jaccard Index and exact genomic distance are not required by the
+assignment. They are included here as a separate validation of the sketch
+estimates.
+
+For the small simulated datasets, the complete k-mer sets can be used to
+calculate
+
+\begin{equation}
+J_{\mathrm{exact}}(A,B)
+=
+\frac{|K_A\cap K_B|}
+{|K_A\cup K_B|}.
+\end{equation}
+
+The exact distance is
+
+\begin{equation}
+d_{\mathrm{exact}}
+=
+1-J_{\mathrm{exact}}.
+\end{equation}
+
+The error is
+
+\begin{equation}
+\mathrm{Error}
+=
+d_{\mathrm{estimated}}-d_{\mathrm{exact}},
+\end{equation}
+
+and the absolute error is
+
+\begin{equation}
+\mathrm{Abs.Error}
+=
+|d_{\mathrm{estimated}}-d_{\mathrm{exact}}|.
+\end{equation}
+
+These values are only used to check how close the sketch estimates are to the
+values obtained from the complete k-mer sets. They are not used instead of the
+estimated distances in the main analysis or in the UPGMA tree construction.
+
+\subsection{Validation: Sketching Density}
+
+\begin{longtable}{llrrrrrr}
+\caption{Exact and estimated values for different sketching densities on
+Test 1 with $k=30$.}
+\\
+\toprule
+Density & Pair & Exact $J$ & Est. $J$ &
+Exact $d$ & Est. $d$ & Error & Abs. Error\\
+\midrule
+\endfirsthead
+
+\toprule
+Density & Pair & Exact $J$ & Est. $J$ &
+Exact $d$ & Est. $d$ & Error & Abs. Error\\
+\midrule
+\endhead
+
+0.1&G1--G2&0.0755&0.0789&0.9245&0.9211&-0.0035&0.0035\\
+0.1&G1--G3&0.0755&0.0732&0.9245&0.9268&0.0023&0.0023\\
+0.1&G2--G3&0.3307&0.4000&0.6693&0.6000&-0.0693&0.0693\\
+
+0.2&G1--G2&0.0755&0.0714&0.9245&0.9286&0.0040&0.0040\\
+0.2&G1--G3&0.0755&0.0746&0.9245&0.9254&0.0008&0.0008\\
+0.2&G2--G3&0.3307&0.4255&0.6693&0.5745&-0.0948&0.0948\\
+
+0.3&G1--G2&0.0755&0.0841&0.9245&0.9159&-0.0086&0.0086\\
+0.3&G1--G3&0.0755&0.0882&0.9245&0.9118&-0.0128&0.0128\\
+0.3&G2--G3&0.3307&0.4125&0.6693&0.5875&-0.0818&0.0818\\
+
+0.5&G1--G2&0.0755&0.0843&0.9245&0.9157&-0.0089&0.0089\\
+0.5&G1--G3&0.0755&0.0843&0.9245&0.9157&-0.0089&0.0089\\
+0.5&G2--G3&0.3307&0.3731&0.6693&0.6269&-0.0424&0.0424\\
+
+0.7&G1--G2&0.0755&0.0897&0.9245&0.9103&-0.0142&0.0142\\
+0.7&G1--G3&0.0755&0.0897&0.9245&0.9103&-0.0142&0.0142\\
+0.7&G2--G3&0.3307&0.3443&0.6693&0.6557&-0.0135&0.0135\\
+
+0.9&G1--G2&0.0755&0.0839&0.9245&0.9161&-0.0084&0.0084\\
+0.9&G1--G3&0.0755&0.0857&0.9245&0.9143&-0.0102&0.0102\\
+0.9&G2--G3&0.3307&0.3390&0.6693&0.6610&-0.0082&0.0082\\
+
+\bottomrule
+\end{longtable}
+
+The exact values remain constant because changing the density does not change
+the original k-mer sets. Only the sketch changes.
+
+For G2--G3, the absolute error was 0.0693 at density 0.1 and 0.0082 at
+density 0.9. The error was not perfectly monotonic, however. For example, it
+increased from 0.0693 to 0.0948 when the density increased from 0.1 to 0.2.
+
+Thus, higher density generally provided a more accurate estimate in this
+experiment, but it did not guarantee a smaller error at every density.
+
+
+% ============================================================
+\subsection{Validation: K-mer Size}
+% ============================================================
+
+\begin{longtable}{llrrrrrr}
+\caption{Exact and estimated values for different k-mer sizes on Test 1
+with density 0.5.}
+\\
+\toprule
+$k$ & Pair & Exact $J$ & Est. $J$ &
+Exact $d$ & Est. $d$ & Error & Abs. Error\\
+\midrule
+\endfirsthead
+
+\toprule
+$k$ & Pair & Exact $J$ & Est. $J$ &
+Exact $d$ & Est. $d$ & Error & Abs. Error\\
+\midrule
+\endhead
+
+10&G1--G2&0.3791&0.4027&0.6209&0.5973&-0.0236&0.0236\\
+10&G1--G3&0.3357&0.3826&0.6643&0.6174&-0.0469&0.0469\\
+10&G2--G3&0.5159&0.5682&0.4841&0.4318&-0.0523&0.0523\\
+
+30&G1--G2&0.0755&0.0843&0.9245&0.9157&-0.0089&0.0089\\
+30&G1--G3&0.0755&0.0843&0.9245&0.9157&-0.0089&0.0089\\
+30&G2--G3&0.3307&0.3731&0.6693&0.6269&-0.0424&0.0424\\
+
+50&G1--G2&0.0000&0.0000&1.0000&1.0000&0.0000&0.0000\\
+50&G1--G3&0.0000&0.0000&1.0000&1.0000&0.0000&0.0000\\
+50&G2--G3&0.2743&0.2750&0.7257&0.7250&-0.0007&0.0007\\
+
+70&G1--G2&0.0000&0.0000&1.0000&1.0000&0.0000&0.0000\\
+70&G1--G3&0.0000&0.0000&1.0000&1.0000&0.0000&0.0000\\
+70&G2--G3&0.2074&0.2333&0.7926&0.7667&-0.0260&0.0260\\
+
+90&G1--G2&0.0000&0.0000&1.0000&1.0000&0.0000&0.0000\\
+90&G1--G3&0.0000&0.0000&1.0000&1.0000&0.0000&0.0000\\
+90&G2--G3&0.1269&0.1400&0.8731&0.8600&-0.0131&0.0131\\
+
+\bottomrule
+\end{longtable}
+
+The validation shows the same general pattern as the main Task 1 results.
+
+For G2--G3, the exact Jaccard Index decreased from 0.5159 at $k=10$ to
+0.1269 at $k=90$. Consequently, the exact distance increased from 0.4841
+to 0.8731.
+
+The sketch estimates were close to the exact values in several cases. For
+example, at $k=50$, the absolute error for G2--G3 was only 0.0007.
+
+The validation therefore supports the conclusion that the choice of k-mer size
+has a substantial effect on the measured similarity.
+
+
+% ============================================================
+\section{Task 2: Evolutionary Tree Estimation}
+% ============================================================
+
+All three simulated datasets were run using
+
+\[
+k=30,\qquad p=0.5.
+\]
+
+The trees were constructed using the estimated distances from the sketches.
+
+\subsection{Test 1 Dataset: Three Genomes}
+
+The lineage information was:
+
+\begin{itemize}
+    \item G1 = accession 1, lineage [0]
+    \item G2 = accession 5, lineage [2,0]
+    \item G3 = accession 6, lineage [2,0]
+\end{itemize}
+
+The estimated pairwise distances were:
+
+\begin{itemize}
+    \item G1--G2: 0.9157
+    \item G1--G3: 0.9157
+    \item G2--G3: 0.6269
+\end{itemize}
+
+The resulting tree was:
+
+\begin{lstlisting}
+Node2
+  G1
+  Node1
+    G2
+    G3
+\end{lstlisting}
+
+G2 and G3 have the smallest estimated distance and are grouped together.
+They also have the same lineage [2,0].
+
+Therefore, the tree agrees with the simulated lineage for Test 1.
+
+
+% ------------------------------------------------------------
+\subsection{Test 2 Dataset: Five Genomes}
+
+The lineage information was:
+
+\begin{itemize}
+    \item G1 = accession 2, lineage [0]
+    \item G2 = accession 7, lineage [3,1,0]
+    \item G3 = accession 8, lineage [3,1,0]
+    \item G4 = accession 9, lineage [4,1,0]
+    \item G5 = accession 10, lineage [4,1,0]
+\end{itemize}
+
+The estimated distances were mostly $1.0000$, indicating very low estimated Jaccard similarity between most genome pairs. The smallest distance was between G4 and G5 ($0.9739$), followed by G2 and G4 ($0.9876$).
+
+The estimated and exact pairwise distances  were:
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\hline
+\textbf{Pair} & \textbf{Exact distance} & \textbf{Estimated distance} \\
+\hline
+G1--G2 & 1.0000 & 1.0000 \\
+G1--G3 & 1.0000 & 1.0000 \\
+G1--G4 & 1.0000 & 1.0000 \\
+G1--G5 & 1.0000 & 1.0000 \\
+G2--G3 & 0.9971 & 1.0000 \\
+G2--G4 & 0.9882 & 0.9876 \\
+G2--G5 & 1.0000 & 1.0000 \\
+G3--G4 & 1.0000 & 1.0000 \\
+G3--G5 & 1.0000 & 1.0000 \\
+G4--G5 & 0.9760 & 0.9739 \\
+\hline
+\end{tabular}
+\caption{Exact and estimated pairwise distances for Test 2 using
+$k=30$ and density $=0.5$.}
+\label{tab:test2_distances}
+\end{table}
+
+The resulting tree was:
+
+\begin{lstlisting}
+Node4
+  Node2
+    G2
+    Node1
+      G4
+      G5
+  Node3
+    G1
+    G3
+\end{lstlisting}
+
+G4 and G5 have the same lineage, have the smallest estimated distance and are grouped directly together in the estimated tree. 
+G2 and G3 also have the same lineage, but they are not grouped directly together. 
+Instead, the estimated tree groups G1 and G3 together. 
+The exact distance between G2 and G3 is $0.9971$, while their estimated distance is $1.0000$. 
+Therefore, the estimated tree does not fully agree with the simulated lineage structure in Test 2 Dataset, although the G4--G5 pair is correctly grouped.
+
+
+
+% ------------------------------------------------------------
+\subsection{Test 3 Dataset: Ten Genomes}
+For Test 3 Dataset, we used $k=30$ and a density of $0.5$. Each genome contained
+approximately 1,971 distinct k-mers. The resulting sketch sizes were
+975, 1004, 965, 984, 976, 951, 1007, 1030, 991, and 988 for G1--G10,
+respectively.
+
+
+The lineage information was:
+
+\begin{itemize}
+    \item G1 = accession 4, lineage [1,0]
+    \item G2 = accession 5, lineage [2,0]
+    \item G3 = accession 7, lineage [3,1,0]
+    \item G4 = accession 17, lineage [8,3,1,0]
+    \item G5 = accession 18, lineage [8,3,1,0]
+    \item G6 = accession 29, lineage [14,6,2,0]
+    \item G7 = accession 27, lineage [13,6,2,0]
+    \item G8 = accession 28, lineage [13,6,2,0]
+    \item G9 = accession 61, lineage [30,14,6,2,0]
+    \item G10 = accession 62, lineage [30,14,6,2,0]
+\end{itemize}
+
+The estimated distances for same-lineage pairs are:
+
+\[
+\begin{array}{c|c|c}
+\text{Genome pair} & \text{Exact distance} & \text{Estimated distance} \\
+\hline
+G4-G5 & 0.7818 & 0.7841 \\
+G7-G8 & 0.8306 & 0.8246 \\
+G9-G10 & 0.8134 & 0.8071
+\end{array}
+\]
+
+
+The resulting tree was:
+
+\begin{lstlisting}
+Node9
+  Node6
+    G1
+    Node5
+      G3
+      Node1
+        G4
+        G5
+  Node8
+    Node4
+      Node2
+        G9
+        G10
+      Node7
+        G2
+        Node3
+          G7
+          G8
+\end{lstlisting}
+
+The estimated tree showed good agreement with the simulated lineage
+structure. The genomes G4 and G5, G7 and G8, and G9 and G10 have the same
+lineage and were grouped directly together in the estimated tree. Their
+estimated distances were $0.7841$, $0.8246$, and $0.8071$, respectively.
+The corresponding exact distances were $0.7818$, $0.8306$, and $0.8134$.
+
+The tree also reflected some of the deeper relationships between the
+genomes. For example, G3 was grouped with the G4--G5 pair, while G6 was
+relatively close to G7--G8. Overall, Test 3 Dataset showed stronger agreement
+between the estimated tree and the simulated lineage structure than
+Test 2 Dataset.
+
+
+% ------------------------------------------------------------
+\subsection{Task 2 Summary}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Comparison of the estimated trees with the simulated lineage
+information.}
+\begin{tabular}{p{2.2cm}p{4.5cm}p{7cm}}
+\toprule
+Dataset & Same-lineage pairs & Observation\\
+\midrule
+Test 1
+&
+G2--G3
+&
+G2 and G3 are grouped directly together.
+\\
+\midrule
+Test 2
+&
+G2--G3; G4--G5
+&
+G4 and G5 are grouped directly together, but G2 and G3 are not.
+\\
+\midrule
+Test 3
+&
+G4--G5; G7--G8; G9--G10
+&
+All three same-lineage pairs are grouped directly together.
+\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+These results show that genomes with smaller estimated distances tend to be
+placed closer together by UPGMA. However, the tree can be affected by errors
+in the estimated distances. Test 2 is an example where two genomes with the
+same simulated lineage were not directly grouped.
+
+
+% ============================================================
+\subsection{The Real \textit{E. coli} Dataset}
+% ============================================================
+
+The real dataset contains 20 \textit{E. coli} genomes.
+
+The experiment used
+
+\[
+k=30,\qquad p=0.5.
+\]
+
+Exact Jaccard validation was not performed for this dataset because each
+genome contains millions of k-mers.
+
+\begin{longtable}{llrr}
+\caption{Genome and sketch sizes for the 20 \textit{E. coli} genomes.}
+\\
+\toprule
+Genome & Accession & Number of k-mers & Sketch size\\
+\midrule
+\endfirsthead
+
+\toprule
+Genome & Accession & Number of k-mers & Sketch size\\
+\midrule
+\endhead
+
+G1&NZ\_CP116919.1&5,192,305&2,595,531\\
+G2&NZ\_CP117068.1&5,136,027&2,549,138\\
+G3&NZ\_CP117013.1&5,184,086&2,592,634\\
+G4&NZ\_CP117116.1&5,168,088&2,584,664\\
+G5&NZ\_CP132204.1&5,122,880&2,512,046\\
+G6&NZ\_AP027159.1&5,437,795&2,720,323\\
+G7&NZ\_AP027162.1&5,436,737&2,719,778\\
+G8&NZ\_AP027165.1&5,322,450&2,665,594\\
+G9&NZ\_AP027170.1&5,373,778&2,687,963\\
+G10&NZ\_AP027176.1&5,406,046&2,724,746\\
+G11&NZ\_AP027181.1&5,477,895&2,740,794\\
+G12&NZ\_AP027183.1&5,516,698&2,746,865\\
+G13&NZ\_AP027188.1&5,486,795&2,744,471\\
+G14&NZ\_AP027191.1&5,517,653&2,768,773\\
+G15&NZ\_CP117067.1&5,422,584&2,713,152\\
+G16&NZ\_CP116807.1&5,212,812&2,687,365\\
+G17&NZ\_CP116451.1&5,162,977&2,511,494\\
+G18&NZ\_CP116835.1&4,943,781&2,404,410\\
+G19&NZ\_CP123548.1&4,997,126&2,498,412\\
+G20&NZ\_CP123549.1&5,016,355&2,508,301\\
+
+\bottomrule
+\end{longtable}
+
+The genomes contain approximately 4.9--5.5 million k-mers each, while the
+sketches contain approximately 2.4--2.8 million hashes each.
+
+Some of the smallest estimated distances were:
+
+\begin{table}[H]
+\centering
+\caption{Examples of small estimated distances in the \textit{E. coli}
+dataset.}
+\begin{tabular}{lrr}
+\toprule
+Pair & Estimated $J$ & Estimated $d$\\
+\midrule
+G8--G9   & 0.9561 & 0.0439\\
+G8--G10  & 0.9546 & 0.0454\\
+G9--G10  & 0.9474 & 0.0526\\
+G14--G15 & 0.9463 & 0.0537\\
+G11--G15 & 0.9437 & 0.0563\\
+G11--G14 & 0.9371 & 0.0629\\
+G13--G15 & 0.9369 & 0.0631\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+These results show that some genome pairs are much more similar according to
+the k-mer sketches than others.
+
+The estimated distances were used as input to UPGMA. The resulting
+evolutionary tree was:
+
+\newpage
+\begin{lstlisting}
+Node19
+  Node17
+    Node12
+      G17
+      G19
+    Node14
+      G3
+      Node10
+        G2
+        Node9
+          G1
+          G5
+  Node18
+    Node11
+      G6
+      Node8
+        Node2
+          G10
+          Node1
+            G8
+            G9
+        Node7
+          G12
+          Node6
+            G7
+            Node5
+              G13
+              Node4
+                G11
+                Node3
+                  G14
+                  G15
+    Node16
+      G18
+      Node15
+        G16
+        Node13
+          G4
+          G20
+\end{lstlisting}
+
+Several pairs with small estimated distances were grouped directly in
+the tree. For example, G8 and G9 form a pair, as do G14 and G15. These
+pairs also had some of the smallest estimated distances in the distance matrix. Other directly grouped pairs include G17--G19, G1--G5, G4--G20, and G16 with the G4--G20 group.
+
+Unlike the simulated datasets, the real \textit{E. coli} dataset does
+not provide the intended lineage information. 
+
+The total computation time was 449.322 seconds, approximately
+7 minutes and 29 seconds. Sketch generation took 328.382 seconds,
+distance calculation took 121.011 seconds, and UPGMA took only
+0.009 seconds.
+
+
+% ============================================================
+\section{Runtime and Computational Complexity}
+% ============================================================
+
+The runtime measurements for the main Task 2 experiments were:
+
+\begin{table}[H]
+\centering
+\small
+\caption{Runtime measurements for the main Task 2 runs.}
+\begin{tabular}{lrrrr}
+\toprule
+Dataset & Sketching & Distance & UPGMA & Total\\
+\midrule
+Test 1 (3 genomes)
+& 0.002 s & 0.000 s & 0.002 s & 0.005 s\\
+
+Test 2 (5 genomes)
+& 0.002 s & 0.001 s & 0.002 s & 0.005 s\\
+
+Test 3 (10 genomes)
+& 0.054 s & 0.011 s & 0.003 s & 0.068 s\\
+
+\textit{E. coli} (20 genomes)
+& 328.382 s & 121.011 s & 0.009 s & 449.322 s\\
+
+\bottomrule
+\end{tabular}
+\end{table}
+
+The three simulated datasets all took less than one second.
+
+The real \textit{E. coli} dataset took 449.322 seconds, which is approximately
+7 minutes and 29 seconds.
+
+The largest part of the runtime was sketch generation, followed by distance
+calculation. UPGMA was very fast in comparison.
+
+For $n$ genomes, the number of unordered genome pairs is
+
+\begin{equation}
+\frac{n(n-1)}{2}=O(n^2).
+\end{equation}
+
+Therefore, the number of pairwise comparisons increases quadratically with
+the number of genomes.
+
+For each genome, k-mer generation and hashing depend approximately linearly
+on the sequence length. The simple UPGMA implementation repeatedly searches
+the current clusters for the closest pair, giving it approximately cubic
+behaviour with respect to the number of genomes.
+
+In the experiments, however, UPGMA was not the computational bottleneck.
+The main cost came from processing the large genome sequences and their
+millions of k-mers.
+
+
+% ============================================================
+\section{Issues, Limitations, and Possible Improvements}
+% ============================================================
+
+\subsection{Hash Stability}
+
+Python's built-in \texttt{hash()} can produce different results between
+program runs because of hash randomization.
+
+This was avoided by using deterministic BLAKE2b hashing.
+
+\subsection{Sketching Density}
+
+A low density produces a small sketch and therefore requires less data to
+compare. However, the density experiment showed that the estimated distance
+can change when the sketch is very small.
+
+A possible improvement would be to select the density based on a target sketch
+size or memory limit.
+
+\subsection{K-mer Size}
+
+The k-mer size has a strong effect on the measured similarity.
+
+In our experiment, G1--G2 and G1--G3 had zero exact Jaccard similarity for
+$k\geq50$.
+
+Therefore, choosing a very large k can make genomes appear completely
+different even when they share some shorter sequence patterns.
+
+\subsection{Exact Validation}
+
+Exact Jaccard calculation is practical for the small simulated datasets, but
+it becomes much more expensive for the real genomes because they contain
+millions of k-mers.
+
+For this reason, exact validation was only performed on the small datasets.
+
+\subsection{Effect of Sketching Error on the Tree}
+
+UPGMA constructs the tree using the estimated distance matrix. Therefore,
+differences between the estimated and exact pairwise distances can affect
+the resulting tree structure. Test 2 illustrates this effect: G2 and G3
+have the same simulated lineage, but their exact distance was $0.9971$
+while their estimated distance was $1.0000$. As a result, they were not
+directly grouped in the estimated tree. This shows how small differences
+in the sketch-based distance estimates can influence the final tree.
+
+
+% ============================================================
+\section{Conclusion}
+% ============================================================
+
+The program successfully estimates genomic distances using k-mer sketches
+and uses these distances to construct binary evolutionary trees with UPGMA.
+
+For Task 1, both sketching density and k-mer size affected the estimated
+distance. The density experiment showed that increasing the density
+increases the sketch size and changes the estimated distance. In the
+validation experiment, estimates at higher densities tended to be closer
+to the exact values, although the sketching error was not perfectly
+monotonic.
+
+The k-mer-size experiment showed a stronger effect. For G2--G3, the
+exact distance increased from 0.4841 at $k=10$ to 0.8731 at $k=90$.
+
+For Task 2, genomes with smaller estimated distances were generally
+placed closer together in the UPGMA tree. The simulated lineage
+comparison showed that Test 1 agreed with the simulated lineage, Test 2
+showed partial agreement, and Test 3 grouped all three examined
+same-lineage pairs directly. Thus, the estimated trees captured several
+of the expected relationships, but the results were not perfect.
+Sketching error can affect the estimated distance matrix and consequently
+the final tree structure.
+
+The runtime experiment also showed that the main computational cost came
+from processing the k-mers and calculating pairwise distances. The
+20-genome \textit{E. coli} dataset took approximately 7.5 minutes in
+total, while the UPGMA calculation itself took only a small fraction of
+a second.
+
+
+
+\newpage
+\section{References}
+
+\begin{enumerate}
+
+\item Biopython, \textit{Bio.Phylo.TreeConstruction module},
+available at: \url{https://biopython.org/docs/dev/api/Bio.Phylo.TreeConstruction.html}
+
+\item D. Cain, \textit{UPGMA: Efficient UPGMA implementation},
+GitHub repository,
+available at: \url{https://github.com/DavidCain/upgma}
+
+
+\item
+DA7067 Computational Mathematics,
+\emph{MinHash--Jaccard lecture slides},
+Stockholm University, 2026.
+
+\end{enumerate}
+
+\end{document}
